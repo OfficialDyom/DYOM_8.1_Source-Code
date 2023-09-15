@@ -1,0 +1,481 @@
+//==================================================
+//
+//  Storyline functionality:
+//  Done:
+//    * Storyfile Menu structure
+//    * Save mission as named file in DSL folder
+//    * Save mission as intro
+//    * Define storyline datastructure
+//    * Save Storyline data to file
+//    * Load Storyline data from file
+//    * input numeric text  (for "after" entering)
+//    * Editmenu for missiontrigger
+//         * Item: Add missiontrigger (select location, input filename, check file exist, choose icon, enter "after")
+//         * Edit missiontrigger (select location, input filename, check file exist, choose icon, enter "after")
+//         * Item: Remove missiontrigger
+//         * Autosave storyline file after each change.
+//    * radaricon support, select and show in designmode
+//    * Show traffic in designmode 
+//    * Info thread will also display missiontrigger info.
+//    * Load storyline on start   
+//    * If DSL/autostart contain 1 execute the storyline(if present).
+//    * Passed/Failed status of mission must be stored for usage by storyline thread
+//    * Implement thread that "executes" the storyline
+//    * Disable DYOM menu while playing a storyline.
+//    * In clear storyline: intro.dat, outro.dat and autostart ( write files with just one "0".)
+//    * OUTRO mission
+//    * Make storyline autorun    (write 1 to autostart file)// 
+//    * Option to load a storyline mission or the (in/ou)tromission ??
+//    * Hotkey to abort storyline  (holding Y and N togethr will abort the storyline
+//    * Autostart only immediate after startup, not after storyline passed of "storyline abort"
+//    * fixed enter designmode properly
+//    * fixed autorun -> mixed storyline/designmode status
+//    * Check "readonly" when reading a file from DSL..
+//    * fixed load outro/intro mission
+//    * reset autorun (when autorun already enabled)
+//    * fixed "new mission"  breekt textinput voor naam af, en de oude speler wordt niet goed opgeruimt.
+//
+//    * Mission rewards
+//            - Coding of trigger rewards ( with "don't change" option):
+//                 money                 20 bits   (0 - 1000000 )     bit 0 - 19
+//                 weather  (0-22)       5  bit 20-24    
+//                 riot                  1 (+1) bit 25 flag, bit 26 value
+//                 wanted possible       1 (+1) bit 27 flag, bit 28 value
+//                 cars/peds enabled     2 (+1) bit 29 flag, bit 30/31 value     
+//                 respect               not coded, always 3 respect for every mission
+//            - Add menu for creating/editing triggers, to configure the mission reward
+//            - When passed , apply the rewards
+//            - When storyline ends, reset riot/maxwantedlevel/ped&carenabled.
+//  ToDo:
+//  Ideas: 
+//    * ?? Create option for saving progress. 
+//  Limits:
+//    * num of missiontriggers currently limited to 24 due to global storage space.
+//
+//   open bugs:
+//    * finish mission in car crashes dyom
+//
+//   Ideas: 
+//    * take weapons from player
+//    * don't die in designmode
+//    * statistics menu, that shows number of objectives/actors/etc etc
+
+//
+//
+//
+//  Analysis of the pointarray bug...
+//  ---------------------------
+//  By looking at the "debug" mode on the website into several randomly selected missions
+//  I saw that most of them have very illogical use of points and a lot of garbage in the point array.
+//  Further inspection shows that several values appear multiple times in the array.
+//  Conclusion of much research:
+//  Declaration of an array with size > 256 results in declaration of an array size MODULO 256.
+//  Thus the arrays of 400 items are reallyu only arrays with 144 items.
+//  Using them as 400 item arrays as we do, thus results in partly overlapping arrays, 
+//  which can lead to very strange results and very nasty bugs, as the last array (Zcoord), overlaps the 256 global variables following it.
+//
+//  The impact of the problem was a bit tempered by the fact that we were only intialising the first 200 points to zero, the rest was left 
+//  filled with whatever was there. Therefor the upper 200 entries were hardly used.
+//
+//  Solution: * Just limiting the number of points to 256 is not an option as this will break all of the missions that have been created with 
+//            V5 and use paths. In this cae we would have to build in a complex routine, to map as many of the higher points in the new valid range.
+//            * Declaring two 200 item array and using them as a 400 item array might work. this will have to be done in combination with initializing all 400 items :)
+//
+//  Fixed.... that took some time to get them properly in the mem-map  :P
+//
+//
+//
+//
+
+//========================================
+//============ change log ================
+//========================================
+
+//=============V1=======================
+// V Implement spawnwith
+// V Markers: make selectable for objectives
+// V Markers: remove for non-objectives
+// V objective markers: ook in auto
+// V Support interiors for player, actor, cars, en objectives(cars, actors)
+// V Fix texts after placement of items.
+// V Actor behaviour: stay in position, attack on sight, kill player, .......
+// V Fix texts in markercolor menu
+// V Use space instead of G to proceed. In the menu's "space" is already used to proceed.
+// V Designtime items: actors lock in place, pickups niet op te pakken
+// V Clean Mission must really destroy all designtime items
+// V Race Checkpoints or   Make markersize configurable to act as  Checkpoints.
+// V Friend behaviour: hold position, follow player
+// V implement must-live (set for friend and test during mission)
+// V Show items after load and after mission.
+// V colorcode items at designtime: friend-actor:green, enemy-actor:red, objectives: white, player: blue
+// V re-enable wanted levels (getting a star crashed the game in the past)  (Was a GTA install prob)
+// V check maximum number of items
+// V automatic objective texts
+// V disable wanted level in designmode.
+// V sequence in mission menu: play mission must be first, and thus default. 
+// V remove existing weapons from player at start of mission 
+// V mustlive for cars 
+// V car: health, properties(bp, fp), color
+// V fix buildings/enexes voor nonsolid interiors.
+// V spawn designtime items with full immunities
+// V implemented storage for timelimit, timeofday, weather, minwantedlevel, maxwantedlevel
+// V usage in mission for timeofday, weather, minwantedlevel, maxwantedlevel
+// V timelimit usage during mission: init timer display, check during objectoves if timer has expired.
+// V create settings menu to set: timelimit, timeofday, weather, minwantedlevel, maxwantedlevel 
+// V Sequence of main menu:  mission, settings, player, objectives, actor, car, pickup
+// V Fix helpteksten voor de nieuwe missie settings
+// V incremented ammo to 9999
+// V Removed spawnmode for objective pickup  (is always once)
+// V following friend improved, now also follow in car.
+// --------- V1.1----------------------------------
+// V Fixed crash when loading a savefile
+// --------- V2------------------- The text release -------------
+// V Texts (name, author, intro & objectives)
+// V Edit items
+// V Delete specific items
+// V "Select Objective"  for adding items to old objectives
+// V Support special actors.
+// V Teleporter/JetPack 
+// V Timelimit per objective.
+// V Timed missions.
+// V Riots
+// --------- V2.1------------------------------------
+// V Fixes crash if special actors were spawned
+// --------- V3.0----The animations/object release-----
+// V Actor animations
+// V Walking/Running Actors 
+// V Insert objectives after selected objective
+// V Disable headshot (for actors/obj-actors).
+// V Secondary carcolor
+// V Player health
+// V Added Parachute and Jetpack Pickup
+// V Increase number of objectives to 50
+// V Fixed Objective Timelimits
+// V Changed default health of actors and player to normal level.
+// V Objects (jumps/barriers/gates etc etc)
+// V Able to destroy objects after an objective  (Hide Object)
+// V Hide/Spawn concept for e.g. replaceing
+// V Car Lockable  
+// V Add ingame reference to the upload site.
+// --------- V4.0-------------------The Cutscene/Race release ----------------
+// V Added Support for Cutscene-objectives
+// V Add a seperate "Add Objective" menu, the objective menu now becomes too cluthered
+// V Corona's, racecheckpoints
+// V Checkpoints after a car-objective must be done with that car
+// V "playonly" mission files. Publish mission. If you load a playonly file, it will start immediatly and clears afterwards
+// V Teleporting objective 
+// V Timelimit increments from 30 sec to 10 sec
+// V New tool: Interior selection
+// V reset interior when using teleport to marker :)
+// --------- V4.1------------------- bugfixes ----------------
+// V Skip cutscenes with <space> press
+// V Fix Cutscenes in interiors when player is not in the same interior
+// V Fixing behavior at end of designing cutscene
+// V Fixed must_live property 
+// V Scaling Issue in weapon accuracy solved
+// V Fixed issue when changing a enemy actor to friendly/neutral
+// V Next objective is only displayed when in an objective-car-checkpoint sequence. 
+// V Previous texts were not cleared when loading V1.x missions
+// V Fixed crashes when adding actor/checkpoints
+// --------- V5.0 ------------------ car related animation ----------------
+// V Car-animaties voor actors: 
+//     v enter nearest car
+//     v leave nearest car
+//     v sit in nearest car 
+// V Behaviour for driver actors:
+//     v follow player
+//     v attack player
+//     v drive route
+//     v Route for planes
+//     v plane follow/attack player
+//     v Route for heli's
+//     v heli follow/attack player
+//     v Option to keep existing route when editing.
+//     V Support for spawning heli's and planes in midair.
+// V Driveby Behaviour for passengers
+// V Multipoint routes for walking and running
+// V Support Looping Routes (for walking, running and driving)
+// V Make special objectives for
+//     V teleport to car
+//     V timeout
+//         V option to display remaining time.
+//     V countdown
+//     V weather
+//     V wantedlevel/max wanted level
+//     V ped behaviour
+//     V set time
+//     V Timelimit objective
+//     V Start timer objective
+// V Actor Objective: "kill all enemies" option, all enemies do have the marker of the objective actor.
+// V standard accuracy was 100, changed to 50%
+// V Info-thread for displaying objective and items info
+// V Add Fire and Explosion as special objects
+// V Checkpoint objective: Add "invisible" checkpoint.
+// V Support for 10 special characters during text input, mapped on shift 1 - 9
+// V Hotkeys during vehicle selection: H(eli),P(lane),B(oat),C(ar),S(pecial)
+// V "Spawn test Vehicle" tool
+// V increased: Pickups(20-> 50), cars(20-> 50), objectives(50->100), 400 points
+// V destroy car objective
+// V no traffic/peds in designmode
+// V "move objective" option
+// V "teleport to objective" tool   
+// V Play from Selected objective tool, use current location as start position.
+// V Radar off in interiors
+// V Actor "DIE" animation.
+// ----------V 6 ---------------
+// V more robust method for putting colors in texts
+// V refactored menuhandling
+// V Fixed initialising of POINT data (only first 200 were cleared)
+// V Fixed out of bounds writing for point data
+// V Make objectives texts editable
+// V Storyline handling 
+//=== release beta
+// V Fixed canceling in menu  (reported by chimpso)
+// V prevented menu-fallthrough in mission menu (reported by chimpso)
+// V created pauze menu to do: abort, save progress and load progress
+// V enable cars and peds during storyline..
+// V restart intro if failing  (now with fix)
+// V error message when load from DSL fails..
+// V limit filenames to 10 characters
+// V ctrl-P  duplicates last added actor.
+// ----------V 6.1beta ---------------
+// V Fixed "outro not starting" after a progress file was loaded
+// V Parachutebug: activation of parachute script was hanging in DYOMintro texts.
+// V Fixed random crashes (e.g. at end of missions) caused by unchecked playeraccess in infothread
+// V Fixed crash when inserting an objective in front of a pickup objective
+// V possible crash cause: DYOM_IN_STORY was reset in startup of mainmenuthread.
+// V untranslated colorcodes when editing existing objective text
+// V Enabled all wasted/busted respawn points
+// V Several major fundamental problems with missiontrigger in an interior, no longer possible.
+// V mission rewards
+//            V money, 
+//            V weather 
+//            V riot, 
+//            V cars/peds enabled 
+//            V wanted level mogelijk tijdens freeroam
+// V Option to use "enter" to make choices and and in menu's
+// V In designmode only show the selected and 3 closest non-selected checkpoints as sphere.
+// V Actors possible to sit/enter missioncar   (pickup someone with your missioncar)
+// V New checkpointtype: entrance marker.
+// V New Special objective:         
+//     V Remove Weapons
+//     V talk on phone
+// V Start storyline clean:
+//     V reset money
+//     V remove weapons
+//     V reset health
+// V Stronger in designer mode
+//      V Prevent player from becoming hungry (also active during Storyline/missions)
+//      V 02AB: set_actor 2@ immunities BP 0 FP 0 EP 1 CP 1 MP 0 
+//      V 055D: make_player $PLAYER_CHAR fireproof 1 
+//      V repair damage on testvehicles
+//      V Prevent drowning 
+// V Dead enemies who were objectives should be able to be hidden after being killed. Same goes for cars.
+// V jump forward animation 
+// - Don't destroy the testcar.
+// - increase maximum number of missions in a storyline, by using the freed globals (trigger_interiour, trigger_mhandle, globals->locals) 
+// ------- Code refactoring -------------
+// V Moved Interior Browse tool to a Mission(2) to save space in MAIN.
+// V Converted all menu's to new structure to save code-space
+// V Improved proper handling of DYOM_trigger_mhandle[]
+// V Combine usage of trigger_handle and trigger mhandle by using 0188: 0@ = create_marker_above_object 1@
+// -----------------V6.1 -------------------------
+// V The "Entrence Marker" objective works correctly, but it does not show up when playing the mission (Like an invisible checkpoint).
+//      ** disabled entrance markers for now    
+// V In the "Objectives" menu, there are two "Special Objective" buttons. Since they both contain different items, 
+//      I'm not sure if this was intentional or not.
+// v When creating an "Actor Objective". If you select the "Health" menu, you are immidiatly taken to the "Select Marker" menu instead 
+//       of the health one. This will also happen if you select the "Kill all Enemies" menu.
+// v When creating a car (not an objective one), if you decide to abort creating it (via F), the "Ghost" of the car will still remain 
+//       behind (vs dissapearing in other versions) and will still appear in the mission. 
+//       (Note that this will only happen if you abort the car creation after you have pressed "Y" in the "Move the car into the 
+//       right position and press "Y" to confirm" screen. If you abort before this screen, the car dissapears normally.)
+// v With the "Add Car" objective, the player will not get out of the car when you press "Y" to confirm the location. 
+//       This means that if you want to abort the selection after that part, the car (Not a "Ghost") will still remain on the 
+//       field both during design mode AND gameplay.
+// v player in designmode is not strong after teleporting 
+//------------------------------------------------------------
+// ---------- old bugs-----------------
+// V Fixed bug when canceling load of mission.
+// V Fixed bug in menu-sequencing
+// V Speeded up detection of marker objective.
+// V scroll back from interiour 99 did not work.
+// V Fixed bug: Cancel during animation selection freezes player.
+// V Cancel of "edit actor" during animation leaves player in actorskin
+// V Colour car fix
+// V Checkpoint sphere remains visible after checkpoint has been deleted.
+// V car animations of actors didn't work for teleport_to_car vehicle. (only for the current objective) 
+// V Driveby doesn't work properly
+// V pathpoints are not all freed, when deleting an actor or defining a new path
+// V Invisible markers were not removed with editing/deleting
+// V only initiate plane landing if final targetpoint is close to the ground.
+// V Fixed some texts, that we're wrongly copy-pasted.
+// V Crash when canceling vehicle selection in "spawn test-vehicle"
+// V Fixed cancel problem in car selection
+// V Display of hide after was sometime strange (after 999)
+// V Deformed actors in interiors
+// V crashes after play from selected
+// V "New Game" in interior placed player way up in the air.
+//--------website / documentation -------------------
+// V Upload website
+// V Update version number ingame.
+// V Promote Upload site: ingame, in readme file and in gtagarage description, other known downloadsites ( gtagaming, it-site)
+// V Arrange new Domainame for website
+// V Add general information page as startpage to the site
+// V Add Faq's / Tutorials
+// - generate an SCM or CLEO script for the mission.
+//--------bugs--------
+// V reset player-health at start of mission
+// V helptext of choosing a pickup wasn't always removed when canceled
+// V removed white marker at 0.0, 0.0 
+// V marker blijft staan na failen van missie. 
+// V camera gaat niet goed terug achter speler als add objective pickup is canceled
+// V playerdummy locked in position 
+// V no marker text is weg bij objective marker..
+// V objective actor must have "hold position" 
+// V car spawning: check if car still exist after Y..
+// V some cars are locked by default
+// V fires at spawn positions must be removed
+// V remove player weapon when starting to place an actor
+// V unable to move player after mission ends
+// V canceling car menu doesn't properly remove menu panel.
+// V main_men -> main menu
+// V Bij oude load-missions (andere versie) spawnen 2 schansen aan het begin.
+// V Wanneer je niet veranderd van plaats, en dan op new mission doet, dan blijft de player in de lucht hangen.
+// V 2x file 1 in lijstje
+// V objective timelimits don't work
+// V Incorrect helptext when positioning HEALTH, BRIBE and ARMOUR pickups  ( Y and N are not usable here)
+// V Fixed positioning bug when placing a walking actor
+// V textinput with permanent textbox
+// V display objective texts for 5 seconds iso 2 seconds
+// V While making a mission, (with cutscenes.) The player was outside. When there was a cutscsnes inside an interior, everyting was pitch black, except you could still see the actors.
+// V Hidewith value messed with mustlive property, fixed.
+// V Texts were not cleared when loading "pre-text missions"
+// V Scaling Issue in weapon accuracy solved
+// V Found issue when changing an anemy actor to neutral/friendly, this wouldn't reset all properties. Requested clearification from the bug-reporter.
+// V next objective is only displayed when in an objective-car-checkpoint sequence. 
+// V Game crashes when adding a checkpoint after a visit to interior  ( browse to interior, add cutscene, telport to marker back to start, select startpos, add checkpoint)
+//=========================================
+//DYOM V7  New Features:
+//----------------------
+// * Moving cutscenes:
+//      - Smooth, linear or static
+//      - Follow actor
+// * Sound Support:
+//      - unique audiocode per mission (for foldername)
+//      - ambient mp3 loop
+//      - multiple objective mp3
+// * Teleport to car as passenger with option to enable drive-by
+// * Moving object on approach
+// * Moving objects along path
+// * Ammo configurable (actors and weapon pickups)
+// * Healthbar option for 1 actor
+// * "must survive" option available for all actors
+// * A second enemy gang
+// * Pickup all similar pickups (optional with counter), for Pickup objective
+// * "Sprint" route animation
+// * "crouch" route animation
+// * "Multiple locations" animation. Chooses randomly from set list of possible locations
+// * "Random" option for actors
+// * "Random" option for weapons
+// * New objects (e.g. stairs, houses, walls, bridges, loopings, trees, furniture, roadblocks)
+// * New Animations (e.g. swat-moves, stances )
+// * Camera movable during object placement
+//
+//Improvements
+//------------
+// * Shift-6  gives ":" instead of "="
+// * display model-id during actor, object and car model selection
+// * Better camera placement during carselection
+// * Display during routepoint now indicates and checks maximum of 64 points per route (existing limit)
+//
+//Bug Fixes
+//---------
+// * Several stability issues solved
+// * Health regeneration fixed
+// * Route edit improved (faster, more stable)
+// * Phone model shown during "talk on phone"
+// * Turn of CJ's voice when not in CJ's skin
+// * Display bug during editing pickups fixed
+// * Space during cutscene skips "all in a row"
+// * Error in timelimit handling fixed
+// * Fix handling of secondary color during "edit vehicle"
+// * Fix messages referring to 'ENTER' key for cancel
+//
+//-------------------------------------------
+// ----------------- V7.0 ---------------------------
+// v moving cutscene camera
+// v cutscene follow actor
+// v sound support
+// v ammo configurable
+// v player health comes back   (prevent hunger must be disabled during (mission/storyline)
+// v Add extra wait after interior browse mission to let goto designmode work correctly
+// v Error in handling of timelimit for checkpoints. (timelimit was reset to last set value, on each checkpoint)
+// v keep route option for editing drivers
+// v editing route: location of keypress instead of location of number appearance
+// v editing route: speed up search for empty point-storage
+// v fix secondary color while editing car
+// v phone model not shown, during talk on phone objective
+// v convert teleport to checkpoint en teleport to marker into Missions
+// v fixed ammo conf: only for weapons that need ammo
+// v must survive option for all actors.
+// v upon deleting an actor: fix cutscene_actor objective
+// v ambient sound support
+// v turn of cj's voice, when not CJ
+// v perf. improve on killallenemies code
+// v fix display bug during editing of pickups
+// v pickup all similar pickups
+// v counter option for pickup all similar pickups
+// v teleport to car now allows seat selection and drive-by
+// v Healthbar on actor
+// v Unique ID per mission for soundfolder
+// v added objects
+// v added swat animations
+// v shift-6  =>  ':'  instead of '='
+// v space during cutscenes, skips all cutscenes in a row, not just the current one.
+// v Added sprint animation
+// v Increased displaytime of the animation names during selection
+// v random weapons
+// v random actors
+// v random locatie
+// v cam movable during object placement 
+// v layout of object moving help text
+// v Fix crash when defining cutscenes
+// v showdesign_items: spawn objects before, the player is positioned
+// v crouch animation
+// v display model id during actor model selection
+// v Fixed seat id when teleport to car, and fix "driveby" check
+// v move objects on approach
+// v model-id's during car and object selection
+// v better camera during carselection
+// v more code clean-up.. mainly objective textedit, and edit of objectives in general
+// v free moving objects.
+// v lots of text still refer to "enter" for canceling, change to 'f'  
+// v second flavor of enemy
+// ------------- beta 1 ------------------------
+// v fix cancel of teleport to markertool between interiors
+// v fix explosion delayed in cutscene
+// v fix cameraguy in followactor mode
+// v fix ammo for weapon pickups
+// v fix explosion dynamite visible
+// v mute ambient sound option
+// v change driving
+// v vehicle routepoints no longer limited to 64
+// v passengers obey "leave nearest vehicle"
+// v fix invisible checkpoint
+// v fix edit of objective texts.
+// v objective sounds don't stop on mission fail
+// v fixed editing of ojects with movement
+// v fixed move on approach movement and triggermechanism
+// v marker colors able to be  real-blue
+// v ctrl-p will have to correctly copy all actor params, (incl deep route)
+// v fixed player-health > 100
+// v fixed wasted after positioning cars and choosing "ready" fast in menu.
+// ----------------- beta 3 ---------------------------
+// v Fixed crash when duplicate an actor without route
+// v fixed timer continueing after mission failed
+// v Fixed behavior when actor leaving cars (possible also fixed crash)
+// v Fixed possible crash when reaching end of  car-route 
+// -------------nice to have's ------------------------
+// - teleport to car doesn't work after another teleport to car 
+// - marker on non-objective actors, option
